@@ -109,7 +109,7 @@ main(int argc, char **argv)
 		{ "no-quote", 'Q', G_OPTION_FLAG_REVERSE, G_OPTION_ARG_NONE, &quote_text, "Don't wrap text-like fields in quotes.", NULL},
 		{ "delimiter", 'd', 0, G_OPTION_ARG_STRING, &delimiter, "Specify an alternative column delimiter. Default is comma.", "char"},
 		{ "row-delimiter", 'R', 0, G_OPTION_ARG_STRING, &row_delimiter, "Specify a row delimiter", "char"},
-		{ "quote", 'q', 0, G_OPTION_ARG_STRING, &quote_char, "Use <char> to wrap text-like fields. Default is double quote.", "char"},
+		{ "quote", 'q', 0, G_OPTION_ARG_STRING, &quote_char, "Use <char> to wrap text-like fields. Default is double quote or single quote if INSERT statements are requested", "char"},
 		{ "backend", 'I', 0, G_OPTION_ARG_STRING, &insert_dialect, "INSERT statements (instead of CSV)", "backend"},
 		{ "date_format", 'D', 0, G_OPTION_ARG_STRING, &date_fmt, "Set the date format (see strftime(3) for details)", "format"},
 		{ "escape", 'X', 0, G_OPTION_ARG_STRING, &escape_char, "Use <char> to escape quoted characters within a field. Default is doubling.", "format"},
@@ -140,7 +140,8 @@ main(int argc, char **argv)
 	if (quote_char)
 		quote_char = escapes(quote_char);
 	else
-		quote_char = g_strdup("\"");
+		// default quotes for SQL should be single quotes
+		quote_char = insert_dialect?g_strdup("'"):g_strdup("\"");
 
 	if (delimiter)
 		delimiter = escapes(delimiter);
