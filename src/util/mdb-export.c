@@ -1,4 +1,5 @@
 /* MDB Tools - A library for reading MS Access database file
+/* MDB Tools - A library for reading MS Access database file
  * Copyright (C) 2000 Brian Bruns
  *
  * This program is free software; you can redistribute it and/or modify
@@ -45,6 +46,8 @@ print_col(FILE *outfile, gchar *col_val, int quote_text, int col_type, int bin_l
 		escape_char = quote_char;
 
 	if (quote_text && is_quote_type(col_type)) {
+		if (is_binary_type(col_type) && bin_mode==MDB_BINEXPORT_HEX)
+			fprintf(outfile,"x"); 
 		fputs(quote_char, outfile);
 		while (1) {
 			if (is_binary_type(col_type)) {
@@ -56,7 +59,10 @@ print_col(FILE *outfile, gchar *col_val, int quote_text, int col_type, int bin_l
 				if (!*col_val)
 					break;
 
-			if (quote_len && !strncmp(col_val, quote_char, quote_len)) {
+			if (is_binary_type(col_type) && bin_mode==MDB_BINEXPORT_HEX) {
+				// nix quote
+				fprintf(outfile, "%02x", *(unsigned char*)col_val++);
+			} else if (quote_len && !strncmp(col_val, quote_char, quote_len)) {
 				fprintf(outfile, "%s%s", escape_char, quote_char);
 				col_val += quote_len;
 #ifndef DONT_ESCAPE_ESCAPE
@@ -66,6 +72,7 @@ print_col(FILE *outfile, gchar *col_val, int quote_text, int col_type, int bin_l
 #endif
 			} else if (is_binary_type(col_type) && *col_val <= 0 && bin_mode == MDB_BINEXPORT_OCTAL)
 				fprintf(outfile, "\\%03o", *(unsigned char*)col_val++);
+			  
 			else
 				putc(*col_val++, outfile);
 		}
@@ -107,7 +114,7 @@ main(int argc, char **argv)
 		{ "date_format", 'D', 0, G_OPTION_ARG_STRING, &date_fmt, "Set the date format (see strftime(3) for details)", "format"},
 		{ "escape", 'X', 0, G_OPTION_ARG_STRING, &escape_char, "Use <char> to escape quoted characters within a field. Default is doubling.", "format"},
 		{ "namespace", 'N', 0, G_OPTION_ARG_STRING, &namespace, "Prefix identifiers with namespace", "namespace"},
-		{ "bin", 'b', 0, G_OPTION_ARG_STRING, &str_bin_mode, "Binary export mode", "strip|raw|octal"},
+		{ "bin", 'b', 0, G_OPTION_ARG_STRING, &str_bin_mode, "Binary export mode", "strip|raw|octal|hex"},
 		{ NULL },
 	};
 	GError *error = NULL;
@@ -161,6 +168,8 @@ main(int argc, char **argv)
 			bin_mode = MDB_BINEXPORT_RAW;
 		else if (!strcmp(str_bin_mode, "octal"))
 			bin_mode = MDB_BINEXPORT_OCTAL;
+		else if (!strcmp(str_bin_mode, "hex"))
+			bin_mode = MDB_BINEXPORT_HEX;
 		else {
 			fputs("Invalid binary mode\n", stderr);
 			exit(1);
