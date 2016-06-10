@@ -28,8 +28,13 @@
 
 #define is_quote_type(x) (x==MDB_TEXT || x==MDB_OLE || x==MDB_MEMO || x==MDB_DATETIME || x==MDB_BINARY || x==MDB_REPID)
 #define is_binary_type(x) (x==MDB_OLE || x==MDB_BINARY || x==MDB_REPID)
-
+#define is_backend(X) (insert_dialect && strcmp(insert_dialect,X)==0)
 static char *escapes(char *s);
+
+static char *insert_dialect = NULL;
+static char *bin_prefix=NULL; 
+static char *bin_suffix=NULL;
+static char *csv_null=NULL;
 
 //#define DONT_ESCAPE_ESCAPE
 static void
@@ -47,9 +52,15 @@ print_col(FILE *outfile, gchar *col_val, int quote_text, int col_type, int bin_l
 
 	if (quote_text && is_quote_type(col_type)) {
 		if (is_binary_type(col_type) && bin_mode==MDB_BINEXPORT_HEX)
-			fprintf(outfile,"x"); 
-		fputs(quote_char, outfile);
+		{
+			fputs(bin_prefix, outfile);
+		}
+		else 
+		{
+			fputs(quote_char, outfile);
+		}
 		while (1) {
+		//if (*col_val=='\\') printf("XXX p=%d,l=%d,e=%s,colval=%s\n",orig_escape_len && !strncmp(col_val, escape_char, orig_escape_len),orig_escape_len,escape_char,col_val);
 			if (is_binary_type(col_type)) {
 				if (bin_mode == MDB_BINEXPORT_STRIP)
 					break;
@@ -65,20 +76,43 @@ print_col(FILE *outfile, gchar *col_val, int quote_text, int col_type, int bin_l
 			} else if (quote_len && !strncmp(col_val, quote_char, quote_len)) {
 				fprintf(outfile, "%s%s", escape_char, quote_char);
 				col_val += quote_len;
-#ifndef DONT_ESCAPE_ESCAPE
 			} else if (orig_escape_len && !strncmp(col_val, escape_char, orig_escape_len)) {
 				fprintf(outfile, "%s%s", escape_char, escape_char);
 				col_val += orig_escape_len;
-#endif
+			} else if (orig_escape_len && *col_val=='\r') {
+				fprintf(outfile, "%sr", escape_char);
+				col_val ++;
+			} else if (orig_escape_len && *col_val=='\n') {
+				fprintf(outfile, "%sn", escape_char);
+				col_val ++;				
 			} else if (is_binary_type(col_type) && *col_val <= 0 && bin_mode == MDB_BINEXPORT_OCTAL)
-				fprintf(outfile, "\\%03o", *(unsigned char*)col_val++);
-			  
+				fprintf(outfile, "\\%03o", *(unsigned char*)col_val++);			  
 			else
 				putc(*col_val++, outfile);
 		}
-		fputs(quote_char, outfile);
+		if (is_binary_type(col_type) && bin_mode==MDB_BINEXPORT_HEX)
+		{
+			fputs(bin_suffix, outfile);
+		}
+		else 
+		{
+			fputs(quote_char, outfile);
+		}
 	} else
-		fputs(col_val, outfile);
+	
+	{
+		if (col_type==MDB_BOOL && insert_dialect && strcmp(insert_dialect,"postgres")==0) 
+		{
+			if (strcmp(col_val,"0")==0) 
+				fputs("false",outfile); 
+			else 
+				fputs("true",outfile); 
+		}
+		else 
+		{
+			fputs(col_val, outfile);
+		}
+	}
 }
 int
 main(int argc, char **argv)
@@ -96,7 +130,6 @@ main(int argc, char **argv)
 	char *escape_char = NULL;
 	int header_row = 1;
 	int quote_text = 1;
-	char *insert_dialect = NULL;
 	char *date_fmt = NULL;
 	char *namespace = NULL;
 	char *str_bin_mode = NULL;
@@ -115,6 +148,9 @@ main(int argc, char **argv)
 		{ "escape", 'X', 0, G_OPTION_ARG_STRING, &escape_char, "Use <char> to escape quoted characters within a field. Default is doubling.", "format"},
 		{ "namespace", 'N', 0, G_OPTION_ARG_STRING, &namespace, "Prefix identifiers with namespace", "namespace"},
 		{ "bin", 'b', 0, G_OPTION_ARG_STRING, &str_bin_mode, "Binary export mode", "strip|raw|octal|hex"},
+		{ "bin-prefix",'p',0,G_OPTION_ARG_STRING,&bin_prefix,"Binary String Prefix","x'"},
+		{ "bin-suffix",'s',0,G_OPTION_ARG_STRING,&bin_suffix,"Binary String Suffix","'"},
+		{ "csv-null",'n',0,G_OPTION_ARG_STRING,&csv_null,"CSV NULL",""},
 		{ NULL },
 	};
 	GError *error = NULL;
@@ -152,10 +188,9 @@ main(int argc, char **argv)
 		row_delimiter = escapes(row_delimiter);
 	else
 		row_delimiter = g_strdup("\n");
-
-	if (escape_char)
-		escape_char = escapes(escape_char);
-
+//	if (escape_char)
+//		escape_char = escapes(escape_char);
+//	printf("XXX e=%s\n",escape_char);
 	if (insert_dialect)
 		header_row = 0;
 
@@ -177,6 +212,21 @@ main(int argc, char **argv)
 		}
 	}
 
+	if (bin_prefix == NULL) 
+	{
+		if is_backend("postgres")
+			bin_prefix="E'\\\\x";
+		else 
+			bin_prefix="x'";
+	}
+	if (bin_suffix == NULL)
+	{
+		bin_suffix="'"; 
+	}
+	if (csv_null==NULL) 
+	{
+		csv_null="";
+	}
 	/* Open file */
 	if (!(mdb = mdb_open(argv[1], MDB_NOFLAGS))) {
 		/* Don't bother clean up memory before exit */
@@ -243,6 +293,8 @@ main(int argc, char **argv)
 				/* Don't quote NULLs */
 				if (insert_dialect)
 					fputs("NULL", outfile);
+				else 
+					fputs(csv_null, outfile);
 			} else {
 				if (col->col_type == MDB_OLE) {
 					value = mdb_ole_read_full(mdb, col, &length);

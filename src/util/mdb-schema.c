@@ -17,6 +17,7 @@
  */
 
 /* this utility dumps the schema for an existing database */
+#include <locale.h>
 #include "mdbtools.h"
 
 #ifdef DMALLOC
@@ -60,6 +61,7 @@ main (int argc, char **argv)
 	GError *error = NULL;
 	GOptionContext *opt_context;
 
+	setlocale(LC_ALL,"");
 	opt_context = g_option_context_new("<file> [<backend>] - Dump schema");
 	g_option_context_add_main_entries(opt_context, entries, NULL /*i18n*/);
 	// g_option_context_set_strict_posix(opt_context, TRUE); /* options first, requires glib 2.44 */
