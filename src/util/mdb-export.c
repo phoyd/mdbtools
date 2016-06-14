@@ -216,6 +216,11 @@ main(int argc, char **argv)
 	{
 		if is_backend("postgres")
 			bin_prefix="E'\\\\x";
+		else if is_backend("sybase")
+		{
+			bin_prefix="0x";
+			bin_suffix="";
+		}
 		else 
 			bin_prefix="x'";
 	}
