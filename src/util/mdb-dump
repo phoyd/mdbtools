@@ -1,0 +1,191 @@
+#!/bin/bash
+
+unsafety=0
+bulk=0
+backend=sqlite
+wrap_transaction=1
+mdb=""
+batch=""
+schema_opts="--no-comments --no-indexes --no-relations --drop-table"
+
+function usage() {
+	cat >&2 <<EOF
+Usage: mdb-dump [OPTION]|<table pattern>... - Dump Database
+
+Create a dump file of a MDB database, that can be used to stage 
+the database in one of the supported backends. 
+
+Options:
+	--mdb=<filename>   
+	    Name of MDB File.
+	--backend=<name>   
+	    Supported backend 
+        One of sqlite,sybase,mysql,postgres,oracle,mysql
+        Defaults to sqlite.                                 
+	--wrap-transaction=0|1
+	    Wrap table creation and data dump in transaction.
+	    Defaults to 1	    
+	--bulk
+	    Create a script with backend specific bulk load statments. 
+	    Usually requires a shared file space between client and server.
+	--batch=<batch_command>
+	    Issues <batch_command> at the end of each table. 
+
+Arguments:
+	<table pattern> 
+	    A pattern suitable for grep to select tables for dump.
+	    
+Examples: 
+
+Dump the tables starting with "key_" from db1 and all tables from db2
+to a sqlite database. 
+
+$ mdb-dump --mdb=db1.mdb key_ --mdb=db2.mdb . | sqlite3 target.db 
+
+Create a bulk loading script for Postgres.
+
+$ mdb-dump --mdb=db.mdb --bulk --backend=postgres . | psql -q my_db 
+
+Create database "db" on SQL-Server and dump db.mdb into it. 
+This uses the sqsh shell, that batches requests with \go. tsql and isql
+use GO for that. 
+
+$ (
+echo 'create database db;'
+echo '\go'
+echo 'use database db;'
+echo '\go'
+mdb-dump --mdb=db.db --batch='\go' --backend=sybase 
+) | sqsh -h -S server -U user -P pass
+
+EOF
+exit 0
+}
+function fail() {
+	echo $@ >&2
+	exit 1
+}
+
+function begin_tbl() {
+	case ${fast}-${backend} in
+		1-sqlite)
+			echo "PRAGMA journal_mode=OFF;"
+			echo "PRAGMA synchronous=OFF;"
+			;;		
+	esac
+	case ${wrap_transaction}-${backend} in
+		1-mysql)
+			echo "begin;"
+			;;		
+		*)
+			echo "begin transaction;"
+			;;
+	esac
+}
+function end_tbl() {
+	case ${wrap_transaction}-${backend} in
+		1-mysql)
+			echo "commit;"
+			;;		
+		1-*)
+			echo "commit transaction;"
+			;;
+	esac
+	echo $batch; 
+}
+function export_insert()
+{
+	 begin_tbl "$tbl"
+	 mdb-schema $schema_opts -T "$tbl" "$mdb" $backend
+	 mdb-export -b hex -D "%Y-%m-%d %H:%M:%S" -I $backend "$mdb" "$tbl"
+	 end_tbl "$tbl"
+}
+function export_bulk()
+{
+	bulkfile="/tmp/bulk-$(basename $mdb)-$backend-$$-$tbl.sql"
+	case $backend in
+		mysql)
+			 begin_tbl "$tbl"
+			 mdb-schema $schema_opts -T "$tbl" "$mdb" $backend
+			 # -b hex erfordert patch
+			 mdb-export -X '\\' -H -D "%Y-%m-%d %H:%M:%S" "$mdb" "$tbl" >"$bulkfile"
+			 cat <<EOF
+load data infile '$bulkfile' into table \`$tbl\` fields terminated by ',' optionally enclosed by '"' escaped by '\\\\';
+EOF
+			 end_tbl "$tbl"
+			 ;;
+		postgres)
+			 begin_tbl "$tbl"
+			 mdb-schema $schema_opts -T "$tbl" "$mdb" $backend
+			 # -b hex erfordert patch
+			 mdb-export --bin=hex --bin-prefix='\\x' --csv-null='\N' --bin-suffix='' -q '' -d '\t' --escape='\' -H -D "%Y-%m-%d %H:%M:%S" "$mdb" "$tbl" >"$bulkfile"
+			 cat <<EOF
+			 COPY "$tbl" 
+			 FROM '$bulkfile'; 
+EOF
+			 end_tbl "$tbl"
+			 ;;
+			
+		*)
+			export_insert "$tbl";;
+	esac
+}
+function do_export() {
+	pat="$1"
+	[ -z "$mdb" ] && fail "mdb not given"
+	mdb-tables -1 $mdb | grep "$pat" | while read tbl
+	do
+	 echo "generating $tbl" >&2
+	 if [ $bulk == 1 ] 
+	 then 
+		export_bulk
+	 else 
+		export_insert
+	 fi
+	done	
+}
+
+
+for arg in $@
+do
+ case "$arg" in
+	--mdb=*) 
+		mdb=${arg#--mdb=};;
+	--backend=*) 
+		backend=${arg#--backend=};;
+	--wrap-transaction=*) 
+		wrap_transaction=${arg#--wrap-transaction=};;
+	--bulk)
+		bulk=1;;
+	--batch=*)		
+		batch=${arg#--batch=}
+		;;
+	--unsafety=*) 
+		unsafety=${arg#--unsafety=}
+		case ${unsafety}-${backend} in
+		1-sqlite)
+			echo "PRAGMA journal_mode=OFF;"
+			echo "PRAGMA synchronous=OFF;"
+			;;		
+		esac;;
+	-?|-h|--help) usage;;
+	--*) fail "invalid argument $arg";;
+	
+	*) do_export "$arg"
+ esac
+done
+
+case ${unsafety}-${backend} in
+1-sqlite)
+	echo "PRAGMA journal_mode=ON;"
+	echo "PRAGMA synchronous=ON;"
+	;;		
+esac
+
+if [ $bulk ]
+then 
+echo "remove bulk files after import:" >&2
+echo " rm /tmp/bulk-$mdb-$backend-$$-*.sql" >&2
+fi
+
+exit 0
